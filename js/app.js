@@ -37,6 +37,7 @@ exportBtn:$('exportBtn'),
 agendaPdfBtn:$('agendaPdfBtn'),
 exportDataBtn:$('exportDataBtn'),
 mailMergeExportBtn:$('mailMergeExportBtn'),
+cventSpeakerBtn:$('cventSpeakerBtn'),
 autoBackupBtn:$('autoBackupBtn'),
 importStateBtn:$('importStateBtn'),
 importStateInput:$('importStateInput'),
@@ -1313,6 +1314,7 @@ els.exportBtn,
 els.agendaPdfBtn,
 els.exportDataBtn,
 els.mailMergeExportBtn,
+els.cventSpeakerBtn,
     els.autoBackupBtn,
     els.summaryBtn,
     els.scheduleSummaryBtn,
@@ -5522,6 +5524,218 @@ function exportMailMergeCSV(){
   XLSX.utils.book_append_sheet(wb, ws, 'Mail Merge Export');
   XLSX.writeFile(wb, 'global-gathering-2026-mail-merge-export.xlsx');
 }
+function showCventSpeakerExport(){
+  els.modalTitle.innerHTML='<h2>Cvent Speaker Import File</h2>';
+  els.modalContent.innerHTML=`
+    <div style="padding:8px 0">
+      <p style="margin:0 0 14px;color:#334155;font-size:.9rem;line-height:1.5">
+        Optionally upload your social media handles file to match Facebook, LinkedIn, and X URLs to speakers. Or skip to export without them.
+      </p>
+      <input type="file" id="cventSocialInput" accept=".xlsx,.xls,.csv" style="display:none">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button class="btn primary" id="cventUploadSocialBtn">Upload Social Media File</button>
+        <button class="btn" id="cventSkipSocialBtn">Skip — no social URLs</button>
+      </div>
+      <div id="cventSocialFeedback" style="margin-top:10px;font-size:.82rem;color:#475569"></div>
+    </div>`;
+  els.modal.classList.add('active');
+  $('cventUploadSocialBtn').onclick=()=>$('cventSocialInput').click();
+  $('cventSocialInput').onchange=async e=>{
+    const file=e.target.files[0];
+    if(!file)return;
+    $('cventSocialFeedback').textContent='Reading file…';
+    try{
+      const rows=await parseFile(file);
+      processCventSpeakerExport(rows);
+    }catch(err){
+      $('cventSocialFeedback').textContent='Error reading file: '+err.message;
+    }
+  };
+  $('cventSkipSocialBtn').onclick=()=>processCventSpeakerExport([]);
+}
+
+function processCventSpeakerExport(socialRows){
+  const socialMap={};
+  for(const row of socialRows){
+    const e=email(row['Email Address']||'');
+    if(!e)continue;
+    socialMap[e]={
+      facebook:clean(row['Facebook URL']||''),
+      linkedin:clean(row['LinkedIn URL']||''),
+      x:clean(row['Twitter/X URL']||'')
+    };
+  }
+
+  const acceptedSessions=state.submissions.filter(s=>getDecision(s.id)==='Accept');
+
+  const emailMap={};
+  for(const session of acceptedSessions){
+    for(const p of(session.presenters||[])){
+      const e=email(p.email||'');
+      if(!e)continue;
+      const rec={
+        name:clean(p.name||[clean(p.firstName||''),clean(p.lastName||'')].filter(Boolean).join(' ')),
+        email:e,
+        organization:clean(p.organization||p.company||p.affiliation||''),
+        title:clean(p.title||'')
+      };
+      if(!emailMap[e]){
+        emailMap[e]=rec;
+      }else{
+        const ex=emailMap[e];
+        if([rec.name,rec.organization,rec.title].filter(Boolean).length>
+           [ex.name,ex.organization,ex.title].filter(Boolean).length){
+          emailMap[e]=rec;
+        }
+      }
+    }
+  }
+
+  function splitName(fullName){
+    const parts=(fullName||'').trim().split(/\s+/);
+    if(parts.length<=1)return{first:parts[0]||'',last:''};
+    return{first:parts[0],last:parts.slice(1).join(' ')};
+  }
+
+  function speakerCode(firstName,lastName,emailAddr){
+    let h=0;
+    const e=(emailAddr||'').toLowerCase().trim();
+    for(let i=0;i<e.length;i++)h=Math.imul(31,h)+e.charCodeAt(i)|0;
+    const num=(Math.abs(h)%900)+100;
+    return `${firstName.replace(/[^a-zA-Z]/g,'')}${lastName.replace(/[^a-zA-Z]/g,'')}${num}`;
+  }
+
+  const speakers=Object.values(emailMap).map(sp=>{
+    const{first,last}=splitName(sp.name);
+    return{...sp,first,last,social:socialMap[sp.email]||{facebook:'',linkedin:'',x:''}};
+  });
+
+  const nameGroups={};
+  for(const sp of speakers){
+    const key=(norm(sp.first)+' '+norm(sp.last)).trim();
+    if(!key)continue;
+    if(!nameGroups[key])nameGroups[key]=[];
+    nameGroups[key].push(sp);
+  }
+  const duplicatePairs=Object.values(nameGroups).filter(g=>g.length>1);
+
+  const totalSpeakers=speakers.length;
+  const withFB=speakers.filter(s=>s.social.facebook).length;
+  const withLI=speakers.filter(s=>s.social.linkedin).length;
+  const withX=speakers.filter(s=>s.social.x).length;
+  const withNoSocial=speakers.filter(s=>!s.social.facebook&&!s.social.linkedin&&!s.social.x).length;
+  const socialEmailsNotMatched=Object.keys(socialMap).filter(e=>!emailMap[e]);
+
+  window._cventState={
+    speakers,
+    duplicatePairs,
+    mergeDecisions:{},
+    speakerCode,
+    stats:{totalSpeakers,withFB,withLI,withX,withNoSocial,socialEmailsNotMatched}
+  };
+
+  renderCventReview();
+}
+
+function renderCventReview(){
+  const{speakers,duplicatePairs,mergeDecisions,speakerCode,stats}=window._cventState;
+  const{totalSpeakers,withFB,withLI,withX,withNoSocial,socialEmailsNotMatched}=stats;
+
+  const unresolvedCount=duplicatePairs.filter(g=>{
+    const key=g.map(s=>s.email).join('|');
+    return!mergeDecisions[key];
+  }).length;
+
+  const dupHtml=duplicatePairs.length===0
+    ?'<p style="color:#0f766e;font-weight:700;margin:0;font-size:.85rem">✓ No potential duplicate speakers found.</p>'
+    :duplicatePairs.map((group,gi)=>{
+        const key=group.map(s=>s.email).join('|');
+        const decision=mergeDecisions[key];
+        return`<div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;margin-bottom:10px;background:#fafafa">
+          <div style="font-weight:800;color:#122345;margin-bottom:8px;font-size:.85rem">"${esc(group[0].name)}" — same name, different emails. Same person?</div>
+          ${group.map((sp,si)=>`
+            <div style="padding:6px 10px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:5px;background:#fff;font-size:.79rem;color:#334155">
+              <b>${esc(sp.email)}</b>${sp.organization?' · '+esc(sp.organization):''}${sp.title?' · '+esc(sp.title):''}
+            </div>`).join('')}
+          <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:8px;align-items:center">
+            <span style="font-size:.75rem;color:#64748b;font-weight:700">Resolve:</span>
+            ${group.map((_,si)=>`<button class="btn${mergeDecisions[key]===group[si].email?' primary':''}" style="font-size:.74rem;padding:5px 9px" data-cvent-gi="${gi}" data-cvent-pick="${si}" onclick="cventMergePick(this)">Use ${esc(group[si].email)}</button>`).join('')}
+            <button class="btn${decision==='separate'?' teal':''}" style="font-size:.74rem;padding:5px 9px" data-cvent-gi="${gi}" data-cvent-pick="separate" onclick="cventMergePick(this)">Keep separate</button>
+          </div>
+        </div>`;
+      }).join('');
+
+  els.modalTitle.innerHTML='<h2>Cvent Speaker Import — Review</h2>';
+  els.modalContent.innerHTML=`
+    <div style="max-height:72vh;overflow-y:auto;padding-right:6px">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
+        <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:12px;padding:10px 12px;text-align:center">
+          <div style="font-size:1.5rem;font-weight:900;color:#122345">${totalSpeakers}</div>
+          <div style="font-size:.7rem;color:#475569;font-weight:700;line-height:1.3">Total unique<br>speakers</div>
+        </div>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:10px 12px;text-align:center">
+          <div style="font-size:1.5rem;font-weight:900;color:#0f766e">${withLI}</div>
+          <div style="font-size:.7rem;color:#475569;font-weight:700;line-height:1.3">LinkedIn<br>matched</div>
+        </div>
+        <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:10px 12px;text-align:center">
+          <div style="font-size:1.5rem;font-weight:900;color:#b45309">${withFB}</div>
+          <div style="font-size:.7rem;color:#475569;font-weight:700;line-height:1.3">Facebook<br>matched</div>
+        </div>
+        <div style="background:#fdf4ff;border:1px solid #e9d5ff;border-radius:12px;padding:10px 12px;text-align:center">
+          <div style="font-size:1.5rem;font-weight:900;color:#7c3aed">${withX}</div>
+          <div style="font-size:.7rem;color:#475569;font-weight:700;line-height:1.3">X / Twitter<br>matched</div>
+        </div>
+      </div>
+      ${withNoSocial>0?`<div style="background:#fef9c3;border:1px solid #fde047;border-radius:10px;padding:8px 13px;margin-bottom:10px;font-size:.8rem;color:#713f12;font-weight:700">⚠ ${withNoSocial} speaker${withNoSocial>1?'s':''} will export with no social media URLs.</div>`:''}
+      ${socialEmailsNotMatched.length>0?`<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:8px 13px;margin-bottom:10px;font-size:.8rem;color:#991b1b"><b>${socialEmailsNotMatched.length} email${socialEmailsNotMatched.length>1?'s':''} in social media file not matched to any accepted speaker:</b><div style="margin-top:4px;font-weight:400">${socialEmailsNotMatched.map(e=>`<span style="font-family:monospace;font-size:.75rem">${esc(e)}</span>`).join(', ')}</div></div>`:''}
+      ${duplicatePairs.length>0?`<div style="margin-bottom:14px"><div style="font-weight:800;color:#122345;margin-bottom:8px;font-size:.9rem">⚠ ${duplicatePairs.length} potential duplicate${duplicatePairs.length>1?'s':''} — review before downloading</div><div>${dupHtml}</div></div>`:`<div style="margin-bottom:14px">${dupHtml}</div>`}
+      <div style="display:flex;justify-content:space-between;align-items:center;padding-top:12px;border-top:1px solid #e5e7eb;gap:10px;flex-wrap:wrap">
+        ${unresolvedCount>0?`<span style="font-size:.78rem;color:#b45309;font-weight:700">⚠ ${unresolvedCount} duplicate${unresolvedCount>1?'s':''} unresolved — will be kept as separate records</span>`:'<span></span>'}
+        <button class="btn primary" onclick="downloadCventFile()">⬇ Download Cvent Speaker Import File</button>
+      </div>
+    </div>`;
+}
+
+window.cventMergePick=function(btn){
+  if(!window._cventState)return;
+  const gi=parseInt(btn.dataset.cventGi);
+  const pick=btn.dataset.cventPick;
+  const group=window._cventState.duplicatePairs[gi];
+  const key=group.map(s=>s.email).join('|');
+  window._cventState.mergeDecisions[key]=pick==='separate'?'separate':group[parseInt(pick)].email;
+  renderCventReview();
+};
+
+function downloadCventFile(){
+  const{speakers,mergeDecisions,speakerCode}=window._cventState;
+  const removedEmails=new Set();
+  for(const[key,decision]of Object.entries(mergeDecisions)){
+    if(decision!=='separate'){
+      key.split('|').filter(e=>e!==decision).forEach(e=>removedEmails.add(e));
+    }
+  }
+  const finalSpeakers=speakers.filter(sp=>!removedEmails.has(sp.email));
+  const rows=[['Speaker Code','First Name','Last Name','Email Address','Company','Title','Facebook URL','LinkedIn URL','X URL','Biography']];
+  for(const sp of finalSpeakers){
+    rows.push([
+      speakerCode(sp.first,sp.last,sp.email),
+      sp.first,
+      sp.last,
+      sp.email,
+      sp.organization,
+      sp.title,
+      sp.social.facebook,
+      sp.social.linkedin,
+      sp.social.x,
+      ''
+    ]);
+  }
+  const wb=XLSX.utils.book_new();
+  const ws=XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols']=[{wch:22},{wch:16},{wch:20},{wch:34},{wch:30},{wch:28},{wch:38},{wch:42},{wch:36},{wch:20}];
+  XLSX.utils.book_append_sheet(wb,ws,'Speaker Import');
+  XLSX.writeFile(wb,'global-gathering-2026-cvent-speaker-import.xlsx');
+}
 
 function downloadCSV(name,rows){const csv=rows.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n'); downloadBlob(name,csv,'text/csv');}
 function downloadBlob(name,content,type){const blob=new Blob([content],{type}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=name; a.click(); URL.revokeObjectURL(url);}
@@ -7350,6 +7564,7 @@ els.exportBtn.onclick=exportCSV;
 els.agendaPdfBtn.onclick=exportAcceptedAgendaPDF;
 els.exportDataBtn.onclick=exportMergedJSON;
 els.mailMergeExportBtn.onclick=exportMailMergeCSV;
+els.cventSpeakerBtn.onclick=showCventSpeakerExport;
 if(els.scoreNotes){
   els.scoreNotes.value = getScoreNotes();
   els.scoreNotes.addEventListener('input', e=>{
