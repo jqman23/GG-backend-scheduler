@@ -5599,8 +5599,18 @@ function processCventSpeakerExport(socialRows){
     return `${firstName.replace(/[^a-zA-Z]/g,'')}${lastName.replace(/[^a-zA-Z]/g,'')}${num}`;
   }
 
+  const sessionCountMap={};
+  for(const session of acceptedSessions){
+    for(const p of(session.presenters||[])){
+      const e=email(p.email||'');
+      if(!e)continue;
+      sessionCountMap[e]=(sessionCountMap[e]||0)+1;
+    }
+  }
+
   const speakers=Object.values(emailMap).map(sp=>({
     ...sp,
+    sessionCount:sessionCountMap[sp.email]||1,
     social:socialMap[sp.email]||{facebook:'',linkedin:'',x:''}
   }));
 
@@ -5619,13 +5629,14 @@ function processCventSpeakerExport(socialRows){
   const withX=speakers.filter(s=>s.social.x).length;
   const withNoSocial=speakers.filter(s=>!s.social.facebook&&!s.social.linkedin&&!s.social.x).length;
   const socialEmailsNotMatched=Object.keys(socialMap).filter(e=>!emailMap[e]);
+  const multiSessionSpeakers=speakers.filter(s=>s.sessionCount>1).length;
 
   window._cventState={
     speakers,
     duplicatePairs,
     mergeDecisions:{},
     speakerCode,
-    stats:{totalSpeakers,withFB,withLI,withX,withNoSocial,socialEmailsNotMatched}
+    stats:{totalSpeakers,withFB,withLI,withX,withNoSocial,socialEmailsNotMatched,multiSessionSpeakers}
   };
 
   renderCventReview();
@@ -5633,7 +5644,8 @@ function processCventSpeakerExport(socialRows){
 
 function renderCventReview(){
   const{speakers,duplicatePairs,mergeDecisions,speakerCode,stats}=window._cventState;
-  const{totalSpeakers,withFB,withLI,withX,withNoSocial,socialEmailsNotMatched}=stats;
+  const{totalSpeakers,withFB,withLI,withX,withNoSocial,socialEmailsNotMatched,multiSessionSpeakers}=stats;
+  const resolvedCount=Object.keys(mergeDecisions).length;
 
   const unresolvedCount=duplicatePairs.filter(g=>{
     const key=g.map(s=>s.email).join('|');
@@ -5662,7 +5674,7 @@ function renderCventReview(){
   els.modalTitle.innerHTML='<h2>Cvent Speaker Import — Review</h2>';
   els.modalContent.innerHTML=`
     <div style="max-height:72vh;overflow-y:auto;padding-right:6px">
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
+      <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:14px">
         <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:12px;padding:10px 12px;text-align:center">
           <div style="font-size:1.5rem;font-weight:900;color:#122345">${totalSpeakers}</div>
           <div style="font-size:.7rem;color:#475569;font-weight:700;line-height:1.3">Total unique<br>speakers</div>
@@ -5678,6 +5690,14 @@ function renderCventReview(){
         <div style="background:#fdf4ff;border:1px solid #e9d5ff;border-radius:12px;padding:10px 12px;text-align:center">
           <div style="font-size:1.5rem;font-weight:900;color:#7c3aed">${withX}</div>
           <div style="font-size:.7rem;color:#475569;font-weight:700;line-height:1.3">X / Twitter<br>matched</div>
+        </div>
+        <div style="background:#f0f9ff;border:1px solid #93c5fd;border-radius:12px;padding:10px 12px;text-align:center">
+          <div style="font-size:1.5rem;font-weight:900;color:#1d4ed8">${multiSessionSpeakers}</div>
+          <div style="font-size:.7rem;color:#475569;font-weight:700;line-height:1.3">On multiple<br>accepted sessions</div>
+        </div>
+        <div style="background:${resolvedCount===duplicatePairs.length&&duplicatePairs.length>0?`#f0fdf4`:`#f8fafc`};border:1px solid ${resolvedCount===duplicatePairs.length&&duplicatePairs.length>0?`#bbf7d0`:`#e2e8f0`};border-radius:12px;padding:10px 12px;text-align:center">
+          <div style="font-size:1.5rem;font-weight:900;color:${duplicatePairs.length===0?`#94a3b8`:resolvedCount===duplicatePairs.length?`#0f766e`:`#b45309`}">${resolvedCount}/${duplicatePairs.length}</div>
+          <div style="font-size:.7rem;color:#475569;font-weight:700;line-height:1.3">Duplicate pairs<br>resolved</div>
         </div>
       </div>
       ${withNoSocial>0?`<div style="background:#fef9c3;border:1px solid #fde047;border-radius:10px;padding:8px 13px;margin-bottom:10px;font-size:.8rem;color:#713f12;font-weight:700">⚠ ${withNoSocial} speaker${withNoSocial>1?'s':''} will export with no social media URLs.</div>`:''}
