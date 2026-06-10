@@ -5621,7 +5621,7 @@ function processCventSpeakerExport(socialRows){
   const speakers=Object.entries(speakerMap).map(([key,sp])=>({
     ...sp,
     sessionCount:sessionCountMap[key]||1,
-    social:sp.email?socialMap[sp.email]||{facebook:'',linkedin:'',x:'}:{facebook:'',linkedin:'',x:''}
+    social:sp.email?socialMap[sp.email]||{facebook:'',linkedin:'',x:''}:{facebook:'',linkedin:'',x:''}
   }));
 
   const emailsInExport=new Set(speakers.map(s=>s.email).filter(Boolean));
