@@ -5574,27 +5574,21 @@ function processCventSpeakerExport(socialRows){
       const e=email(p.email||'');
       if(!e)continue;
       const rec={
-        name:clean(p.name||[clean(p.firstName||''),clean(p.lastName||'')].filter(Boolean).join(' ')),
+        firstName:clean(p.firstName||''),
+        lastName:clean(p.lastName||''),
         email:e,
         organization:clean(p.organization||p.company||p.affiliation||''),
-        title:clean(p.title||'')
+        title:clean(p.title||''),
+        bio:clean(p.bio||'')
       };
       if(!emailMap[e]){
         emailMap[e]=rec;
       }else{
         const ex=emailMap[e];
-        if([rec.name,rec.organization,rec.title].filter(Boolean).length>
-           [ex.name,ex.organization,ex.title].filter(Boolean).length){
-          emailMap[e]=rec;
-        }
+        const score=r=>[r.firstName,r.lastName,r.organization,r.title,r.bio].filter(Boolean).length;
+        if(score(rec)>score(ex)) emailMap[e]=rec;
       }
     }
-  }
-
-  function splitName(fullName){
-    const parts=(fullName||'').trim().split(/\s+/);
-    if(parts.length<=1)return{first:parts[0]||'',last:''};
-    return{first:parts[0],last:parts.slice(1).join(' ')};
   }
 
   function speakerCode(firstName,lastName,emailAddr){
@@ -5605,14 +5599,14 @@ function processCventSpeakerExport(socialRows){
     return `${firstName.replace(/[^a-zA-Z]/g,'')}${lastName.replace(/[^a-zA-Z]/g,'')}${num}`;
   }
 
-  const speakers=Object.values(emailMap).map(sp=>{
-    const{first,last}=splitName(sp.name);
-    return{...sp,first,last,social:socialMap[sp.email]||{facebook:'',linkedin:'',x:''}};
-  });
+  const speakers=Object.values(emailMap).map(sp=>({
+    ...sp,
+    social:socialMap[sp.email]||{facebook:'',linkedin:'',x:''}
+  }));
 
   const nameGroups={};
   for(const sp of speakers){
-    const key=(norm(sp.first)+' '+norm(sp.last)).trim();
+    const key=(norm(sp.firstName)+' '+norm(sp.lastName)).trim();
     if(!key)continue;
     if(!nameGroups[key])nameGroups[key]=[];
     nameGroups[key].push(sp);
@@ -5652,7 +5646,7 @@ function renderCventReview(){
         const key=group.map(s=>s.email).join('|');
         const decision=mergeDecisions[key];
         return`<div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;margin-bottom:10px;background:#fafafa">
-          <div style="font-weight:800;color:#122345;margin-bottom:8px;font-size:.85rem">"${esc(group[0].name)}" — same name, different emails. Same person?</div>
+          <div style="font-weight:800;color:#122345;margin-bottom:8px;font-size:.85rem">"${esc([group[0].firstName,group[0].lastName].filter(Boolean).join(` `))||esc(group[0].email)}" — same name, different emails. Same person?</div>
           ${group.map((sp,si)=>`
             <div style="padding:6px 10px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:5px;background:#fff;font-size:.79rem;color:#334155">
               <b>${esc(sp.email)}</b>${sp.organization?' · '+esc(sp.organization):''}${sp.title?' · '+esc(sp.title):''}
@@ -5718,16 +5712,16 @@ function downloadCventFile(){
   const rows=[['Speaker Code','First Name','Last Name','Email Address','Company','Title','Facebook URL','LinkedIn URL','X URL','Biography']];
   for(const sp of finalSpeakers){
     rows.push([
-      speakerCode(sp.first,sp.last,sp.email),
-      sp.first,
-      sp.last,
+      speakerCode(sp.firstName,sp.lastName,sp.email),
+      sp.firstName,
+      sp.lastName,
       sp.email,
       sp.organization,
       sp.title,
       sp.social.facebook,
       sp.social.linkedin,
       sp.social.x,
-      ''
+      sp.bio
     ]);
   }
   const wb=XLSX.utils.book_new();
