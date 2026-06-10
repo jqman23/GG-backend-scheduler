@@ -5579,8 +5579,9 @@ function processCventSpeakerExport(socialRows){
   for(const session of acceptedSessions){
     for(const p of(session.presenters||[])){
       const e=email(p.email||'');
-      const fn=clean(p.firstName||'');
-      const ln=clean(p.lastName||'');
+      const _np=(!clean(p.firstName||'')&&!clean(p.lastName||'')&&clean(p.name||''))?clean(p.name).split(/\s+/):null;
+      const fn=clean(p.firstName||'')||(_np?_np[0]:'');
+      const ln=clean(p.lastName||'')||(_np?_np.slice(1).join(' '):'');
       const key=presenterMapKey(fn,ln,e);
       if(!key)continue; // truly nothing to identify by — skip
 
