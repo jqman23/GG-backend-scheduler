@@ -5928,12 +5928,12 @@ function downloadCventSessionFile(){
     ]);
   }
   const wb=XLSX.utils.book_new();
-  const ws=XLSX.utils.aoa_to_sheet(rows);
+  const ws=XLSX.utils.aoa_to_sheet(rows,{cellDates:true});
   for(let r=1;r<rows.length;r++){
     [4,5].forEach(c=>{
       const addr=XLSX.utils.encode_cell({r,c});
       const cell=ws[addr];
-      if(cell&&cell.t==='d')cell.z='m/d/yyyy h:mm';
+      if(cell&&(cell.t==='d'||cell.t==='n'))cell.z='m/d/yyyy h:mm';
     });
   }
   ws['!cols']=[{wch:48},{wch:14},{wch:11},{wch:28},{wch:20},{wch:20},{wch:52},{wch:22},{wch:22},{wch:30},{wch:18},{wch:14},{wch:36},{wch:16},{wch:12},{wch:12},{wch:28},{wch:30}];
