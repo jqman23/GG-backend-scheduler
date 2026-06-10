@@ -38,6 +38,7 @@ agendaPdfBtn:$('agendaPdfBtn'),
 exportDataBtn:$('exportDataBtn'),
 mailMergeExportBtn:$('mailMergeExportBtn'),
 cventSpeakerBtn:$('cventSpeakerBtn'),
+cventSessionBtn:$('cventSessionBtn'),
 autoBackupBtn:$('autoBackupBtn'),
 importStateBtn:$('importStateBtn'),
 importStateInput:$('importStateInput'),
@@ -1315,6 +1316,7 @@ els.agendaPdfBtn,
 els.exportDataBtn,
 els.mailMergeExportBtn,
 els.cventSpeakerBtn,
+els.cventSessionBtn,
     els.autoBackupBtn,
     els.summaryBtn,
     els.scheduleSummaryBtn,
@@ -5524,6 +5526,16 @@ function exportMailMergeCSV(){
   XLSX.utils.book_append_sheet(wb, ws, 'Mail Merge Export');
   XLSX.writeFile(wb, 'global-gathering-2026-mail-merge-export.xlsx');
 }
+function cventSpeakerCode(firstName,lastName,emailAddr){
+  const seed=emailAddr?emailAddr.toLowerCase().trim():norm((firstName+' '+lastName).trim());
+  let h=0;
+  for(let i=0;i<seed.length;i++)h=Math.imul(31,h)+seed.charCodeAt(i)|0;
+  const num=(Math.abs(h)%900)+100;
+  const namePart=(firstName+lastName).replace(/[^a-zA-Z]/g,'');
+  const prefix=namePart||(emailAddr?emailAddr.split('@')[0].replace(/[^a-zA-Z0-9]/g,''):'Speaker');
+  return `${prefix}${num}`;
+}
+
 function showCventSpeakerExport(){
   els.modalTitle.innerHTML='<h2>Cvent Speaker Import File</h2>';
   els.modalContent.innerHTML=`
@@ -5606,17 +5618,7 @@ function processCventSpeakerExport(socialRows){
     }
   }
 
-  function speakerCode(firstName,lastName,emailAddr){
-    // Hash seed: email is primary stable identifier; fall back to normalized name
-    const seed=emailAddr?emailAddr.toLowerCase().trim():norm((firstName+' '+lastName).trim());
-    let h=0;
-    for(let i=0;i<seed.length;i++)h=Math.imul(31,h)+seed.charCodeAt(i)|0;
-    const num=(Math.abs(h)%900)+100;
-    // Prefix: name if available, else email local-part, else 'Speaker'
-    const namePart=(firstName+lastName).replace(/[^a-zA-Z]/g,'');
-    const prefix=namePart||(emailAddr?emailAddr.split('@')[0].replace(/[^a-zA-Z0-9]/g,''):'Speaker');
-    return `${prefix}${num}`;
-  }
+  const speakerCode=cventSpeakerCode;
 
   const speakers=Object.entries(speakerMap).map(([key,sp])=>({
     ...sp,
@@ -5768,6 +5770,176 @@ function downloadCventFile(){
 
 function downloadCSV(name,rows){const csv=rows.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n'); downloadBlob(name,csv,'text/csv');}
 function downloadBlob(name,content,type){const blob=new Blob([content],{type}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=name; a.click(); URL.revokeObjectURL(url);}
+
+// ─── Cvent Session Import Export ──────────────────────────────────────────────
+
+function cventSessionCode(title){
+  const seed=norm(title||'').replace(/\s+/g,'');
+  let h=0;
+  for(let i=0;i<seed.length;i++)h=Math.imul(31,h)+seed.charCodeAt(i)|0;
+  const num=(Math.abs(h)%9000)+1000;
+  const prefix=(title||'').replace(/[^a-zA-Z]/g,'').slice(0,4).toUpperCase()||'SESS';
+  return`${prefix}${num}`;
+}
+
+function cventSessionDateCell(day,time){
+  const d=norm(day||'');
+  let ymd;
+  if(d.includes('oct 6'))ymd=[2026,9,6];
+  else if(d.includes('oct 7'))ymd=[2026,9,7];
+  else if(d.includes('oct 8'))ymd=[2026,9,8];
+  else return'';
+  const mins=timeMinutes(time);
+  if(mins==null)return'';
+  return new Date(Date.UTC(ymd[0],ymd[1]-1,ymd[2],Math.floor(mins/60),mins%60,0));
+}
+
+function sessionPresenterCodes(session){
+  const codes=[];
+  for(const p of(session.presenters||[])){
+    const _np=(!clean(p.firstName||'')&&!clean(p.lastName||'')&&clean(p.name||''))?clean(p.name).split(/\s+/):null;
+    const fn=clean(p.firstName||'')||(_np?_np[0]:'');
+    const ln=clean(p.lastName||'')||(_np?_np.slice(1).join(' '):'');
+    const e=email(p.email||'');
+    if(!fn&&!ln&&!e)continue;
+    codes.push(cventSpeakerCode(fn,ln,e));
+  }
+  return[...new Set(codes)];
+}
+
+function showCventSessionExport(){
+  processCventSessionExport();
+}
+
+function processCventSessionExport(){
+  const accepted=state.submissions.filter(s=>getDecision(s.id)==='Accept');
+  const noTheme=accepted.filter(s=>!clean(s.theme||''));
+  const noDescription=accepted.filter(s=>!clean(s.description||''));
+  const noType=accepted.filter(s=>!clean(s.type||''));
+  const noSpeakers=accepted.filter(s=>!(s.presenters||[]).some(p=>{
+    const _np=(!clean(p.firstName||'')&&!clean(p.lastName||'')&&clean(p.name||''))?clean(p.name).split(/\s+/):null;
+    const fn=clean(p.firstName||'')||(_np?_np[0]:'');
+    const ln=clean(p.lastName||'')||(_np?_np.slice(1).join(' '):'');
+    return fn||ln||email(p.email||'');
+  }));
+  const noSchedule=accepted.filter(s=>{const sch=getSchedule(s.id);return!sch.day||!sch.start;});
+  const noEndTime=accepted.filter(s=>{
+    const sch=getSchedule(s.id);
+    if(!sch.day||!sch.start)return false;
+    const slot=findSkeletonSlot(sch.day,sch.start);
+    return!clean(sch.end||slot?.end||'');
+  });
+  const noTags=accepted.filter(s=>!(s.tags||[]).length);
+  window._cventSessionState={accepted,noTheme,noDescription,noType,noSpeakers,noSchedule,noEndTime,noTags};
+  renderCventSessionReview();
+}
+
+function renderCventSessionReview(){
+  const{accepted,noTheme,noDescription,noType,noSpeakers,noSchedule,noEndTime,noTags}=window._cventSessionState;
+  const total=accepted.length;
+
+  function detailRows(sessions,label){
+    if(!sessions.length)return`<p style="color:#0f766e;font-weight:700;font-size:.82rem;margin:2px 0">✓ All sessions have ${label}.</p>`;
+    return`<details style="margin-bottom:8px"><summary style="font-weight:700;color:#991b1b;cursor:pointer;font-size:.83rem;padding:5px 0">⚠ ${sessions.length} session${sessions.length>1?'s':''} missing ${label}</summary>
+      <div style="margin-top:5px;display:flex;flex-direction:column;gap:3px">${sessions.map(s=>`<div style="font-size:.78rem;color:#334155;padding:4px 10px;background:#fef2f2;border-radius:6px;border:1px solid #fecaca">${esc(s.title||'Untitled')}</div>`).join('')}</div></details>`;
+  }
+
+  els.modalTitle.innerHTML='<h2>Cvent Session Import — Review</h2>';
+  els.modalContent.innerHTML=`
+    <div style="max-height:72vh;overflow-y:auto;padding-right:6px">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
+        <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:12px;padding:10px 12px;text-align:center">
+          <div style="font-size:1.5rem;font-weight:900;color:#122345">${total}</div>
+          <div style="font-size:.7rem;color:#475569;font-weight:700;line-height:1.3">Accepted<br>sessions</div>
+        </div>
+        <div style="background:${noSchedule.length?'#fef2f2':'#f0fdf4'};border:1px solid ${noSchedule.length?'#fecaca':'#bbf7d0'};border-radius:12px;padding:10px 12px;text-align:center">
+          <div style="font-size:1.5rem;font-weight:900;color:${noSchedule.length?'#991b1b':'#0f766e'}">${noSchedule.length}</div>
+          <div style="font-size:.7rem;color:#475569;font-weight:700;line-height:1.3">Not yet<br>scheduled</div>
+        </div>
+        <div style="background:${noTheme.length?'#fff7ed':'#f0fdf4'};border:1px solid ${noTheme.length?'#fed7aa':'#bbf7d0'};border-radius:12px;padding:10px 12px;text-align:center">
+          <div style="font-size:1.5rem;font-weight:900;color:${noTheme.length?'#b45309':'#0f766e'}">${noTheme.length}</div>
+          <div style="font-size:.7rem;color:#475569;font-weight:700;line-height:1.3">No theme<br>(Category blank)</div>
+        </div>
+        <div style="background:${noSpeakers.length?'#fef2f2':'#f0fdf4'};border:1px solid ${noSpeakers.length?'#fecaca':'#bbf7d0'};border-radius:12px;padding:10px 12px;text-align:center">
+          <div style="font-size:1.5rem;font-weight:900;color:${noSpeakers.length?'#991b1b':'#0f766e'}">${noSpeakers.length}</div>
+          <div style="font-size:.7rem;color:#475569;font-weight:700;line-height:1.3">No identifiable<br>speakers</div>
+        </div>
+        <div style="background:${noDescription.length?'#fff7ed':'#f0fdf4'};border:1px solid ${noDescription.length?'#fed7aa':'#bbf7d0'};border-radius:12px;padding:10px 12px;text-align:center">
+          <div style="font-size:1.5rem;font-weight:900;color:${noDescription.length?'#b45309':'#0f766e'}">${noDescription.length}</div>
+          <div style="font-size:.7rem;color:#475569;font-weight:700;line-height:1.3">No<br>description</div>
+        </div>
+        <div style="background:${noType.length?'#fef2f2':'#f0fdf4'};border:1px solid ${noType.length?'#fecaca':'#bbf7d0'};border-radius:12px;padding:10px 12px;text-align:center">
+          <div style="font-size:1.5rem;font-weight:900;color:${noType.length?'#991b1b':'#0f766e'}">${noType.length}</div>
+          <div style="font-size:.7rem;color:#475569;font-weight:700;line-height:1.3">No presentation<br>type</div>
+        </div>
+        <div style="background:${noEndTime.length?'#fef2f2':'#f0fdf4'};border:1px solid ${noEndTime.length?'#fecaca':'#bbf7d0'};border-radius:12px;padding:10px 12px;text-align:center">
+          <div style="font-size:1.5rem;font-weight:900;color:${noEndTime.length?'#991b1b':'#0f766e'}">${noEndTime.length}</div>
+          <div style="font-size:.7rem;color:#475569;font-weight:700;line-height:1.3">Scheduled but<br>no end time</div>
+        </div>
+        <div style="background:${noTags.length?'#fff7ed':'#f0fdf4'};border:1px solid ${noTags.length?'#fed7aa':'#bbf7d0'};border-radius:12px;padding:10px 12px;text-align:center">
+          <div style="font-size:1.5rem;font-weight:900;color:${noTags.length?'#b45309':'#0f766e'}">${noTags.length}</div>
+          <div style="font-size:.7rem;color:#475569;font-weight:700;line-height:1.3">No CTA<br>tags</div>
+        </div>
+      </div>
+      ${noSchedule.length>0?`<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:8px 13px;margin-bottom:10px;font-size:.8rem;color:#991b1b;font-weight:700">🚨 ${noSchedule.length} session${noSchedule.length>1?'s':''} unscheduled — Start/End Date columns will be blank. Cvent may reject these rows. Consider finishing scheduling first.</div>`:''}
+      ${noEndTime.length>0?`<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:8px 13px;margin-bottom:10px;font-size:.8rem;color:#92400e;font-weight:700">⚠ ${noEndTime.length} session${noEndTime.length>1?'s':''} have a start time but no end time in the program skeleton — End Date column will be blank.</div>`:''}
+      <div style="border:1px solid #e5e7eb;border-radius:12px;padding:14px;margin-bottom:14px;background:#fafafa">
+        <div style="font-weight:800;color:#122345;margin-bottom:10px;font-size:.88rem">Discrepancy Details</div>
+        ${detailRows(noSchedule,'a schedule')}
+        ${detailRows(noTheme,'a theme / category')}
+        ${detailRows(noDescription,'a description')}
+        ${detailRows(noType,'a presentation type')}
+        ${detailRows(noSpeakers,'identifiable speakers')}
+        ${detailRows(noEndTime,'an end time')}
+        ${detailRows(noTags,'CTA tags')}
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding-top:12px;border-top:1px solid #e5e7eb;gap:10px;flex-wrap:wrap">
+        <span style="font-size:.76rem;color:#64748b;max-width:380px;line-height:1.4">Speaker codes use the same algorithm as the Speaker Import file — they will match codes already in Cvent.</span>
+        <button class="btn primary" onclick="downloadCventSessionFile()">⬇ Download Cvent Session Import File</button>
+      </div>
+    </div>`;
+  els.modal.classList.add('active');
+}
+
+function downloadCventSessionFile(){
+  const{accepted}=window._cventSessionState;
+  const headers=['Session Name','Session Code','Session Type','Category','Session Start Date/Time','End Date/Time','Description','Presentation Type','Open for Registration','Allow registration in Attendee Hub','Display on Agenda','Display Time','Speaker Code','Display Priority','Font Style','Session ID','Feature session on website and app','2024 CTA tags'];
+  const rows=[headers];
+  for(const s of accepted){
+    const sch=getSchedule(s.id);
+    const slot=findSkeletonSlot(sch.day||'',sch.start||'');
+    const endTime=clean(sch.end||slot?.end||'');
+    rows.push([
+      clean(s.title||''),
+      cventSessionCode(s.title||''),
+      'Optional',
+      clean(s.theme||''),
+      cventSessionDateCell(sch.day||'',sch.start||''),
+      endTime?cventSessionDateCell(sch.day||'',endTime):'',
+      clean(s.description||''),
+      clean(s.type||''),
+      'Yes','Yes','Yes','Yes',
+      sessionPresenterCodes(s).join(','),
+      0,
+      'Normal',
+      '',
+      'No',
+      (s.tags||[]).join(',')
+    ]);
+  }
+  const wb=XLSX.utils.book_new();
+  const ws=XLSX.utils.aoa_to_sheet(rows);
+  for(let r=1;r<rows.length;r++){
+    [4,5].forEach(c=>{
+      const addr=XLSX.utils.encode_cell({r,c});
+      const cell=ws[addr];
+      if(cell&&cell.t==='d')cell.z='m/d/yyyy h:mm';
+    });
+  }
+  ws['!cols']=[{wch:48},{wch:14},{wch:11},{wch:28},{wch:20},{wch:20},{wch:52},{wch:22},{wch:22},{wch:30},{wch:18},{wch:14},{wch:36},{wch:16},{wch:12},{wch:12},{wch:28},{wch:30}];
+  XLSX.utils.book_append_sheet(wb,ws,'Session Import');
+  XLSX.writeFile(wb,'global-gathering-2026-cvent-session-import.xlsx');
+}
 
 function exportAcceptedAgendaPDF(){
   function agendaDecisionIncluded(s){
@@ -7594,6 +7766,7 @@ els.agendaPdfBtn.onclick=exportAcceptedAgendaPDF;
 els.exportDataBtn.onclick=exportMergedJSON;
 els.mailMergeExportBtn.onclick=exportMailMergeCSV;
 els.cventSpeakerBtn.onclick=showCventSpeakerExport;
+els.cventSessionBtn.onclick=showCventSessionExport;
 if(els.scoreNotes){
   els.scoreNotes.value = getScoreNotes();
   els.scoreNotes.addEventListener('input', e=>{
