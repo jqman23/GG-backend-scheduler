@@ -5791,7 +5791,7 @@ function cventSessionDateCell(day,time){
   else return'';
   const mins=timeMinutes(time);
   if(mins==null)return'';
-  return new Date(Date.UTC(ymd[0],ymd[1]-1,ymd[2],Math.floor(mins/60),mins%60,0));
+  return new Date(Date.UTC(ymd[0],ymd[1],ymd[2],Math.floor(mins/60),mins%60,0));
 }
 
 function sessionPresenterCodes(session){
