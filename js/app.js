@@ -5782,16 +5782,19 @@ function cventSessionCode(title){
   return`${prefix}${num}`;
 }
 
-function cventSessionDateCell(day,time){
-  const d=norm(day||'');
-  let ymd;
-  if(d.includes('oct 6'))ymd=[2026,9,6];
-  else if(d.includes('oct 7'))ymd=[2026,9,7];
-  else if(d.includes('oct 8'))ymd=[2026,9,8];
-  else return'';
-  const mins=timeMinutes(time);
-  if(mins==null)return'';
-  return new Date(Date.UTC(ymd[0],ymd[1],ymd[2],Math.floor(mins/60),mins%60,0));
+function cventSessionDateSerial(day,time,isEnd,startTime){
+  if(!day||!time)return'';
+  const utc=skeletonStoredToUtc(day,time,isEnd||false,startTime||'');
+  if(!utc)return'';
+  const parts=new Intl.DateTimeFormat('en-US',{
+    timeZone:CONFERENCE_TIMEZONE,
+    year:'numeric',month:'numeric',day:'numeric',
+    hour:'numeric',minute:'2-digit',hour12:false
+  }).formatToParts(utc);
+  const obj={};
+  parts.forEach(p=>{if(p.type!=='literal')obj[p.type]=p.value;});
+  const h=Number(obj.hour)===24?0:Number(obj.hour);
+  return Date.UTC(Number(obj.year),Number(obj.month)-1,Number(obj.day),h,Number(obj.minute),0)/86400000+25569;
 }
 
 function sessionPresenterCodes(session){
@@ -5914,8 +5917,8 @@ function downloadCventSessionFile(){
       cventSessionCode(s.title||''),
       'Optional',
       clean(s.theme||''),
-      cventSessionDateCell(sch.day||'',sch.start||''),
-      endTime?cventSessionDateCell(sch.day||'',endTime):'',
+      cventSessionDateSerial(sch.day||'',sch.start||'',false,''),
+      endTime?cventSessionDateSerial(sch.day||'',endTime,true,sch.start||''):'',
       clean(s.description||''),
       clean(s.type||''),
       'Yes','Yes','Yes','Yes',
@@ -5928,12 +5931,13 @@ function downloadCventSessionFile(){
     ]);
   }
   const wb=XLSX.utils.book_new();
-  const ws=XLSX.utils.aoa_to_sheet(rows,{cellDates:true});
+  const ws=XLSX.utils.aoa_to_sheet(rows);
+  const dateFormat='m/d/yyyy h:mm';
   for(let r=1;r<rows.length;r++){
     [4,5].forEach(c=>{
       const addr=XLSX.utils.encode_cell({r,c});
       const cell=ws[addr];
-      if(cell&&(cell.t==='d'||cell.t==='n'))cell.z='m/d/yyyy h:mm';
+      if(cell&&cell.v!==''){cell.t='n';cell.z=dateFormat;}
     });
   }
   ws['!cols']=[{wch:48},{wch:14},{wch:11},{wch:28},{wch:20},{wch:20},{wch:52},{wch:22},{wch:22},{wch:30},{wch:18},{wch:14},{wch:36},{wch:16},{wch:12},{wch:12},{wch:28},{wch:30}];
