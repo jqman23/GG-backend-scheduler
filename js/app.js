@@ -5568,52 +5568,62 @@ function processCventSpeakerExport(socialRows){
 
   const acceptedSessions=state.submissions.filter(s=>getDecision(s.id)==='Accept');
 
-  const emailMap={};
+  // Key: email if present, else __name__normalizedFirstLast (no-email speakers)
+  function presenterMapKey(fn,ln,em){
+    return em||(fn||ln?`__name__${norm(fn)}_${norm(ln)}`:null);
+  }
+
+  const speakerMap={};
+  const sessionCountMap={};
+
   for(const session of acceptedSessions){
     for(const p of(session.presenters||[])){
       const e=email(p.email||'');
-      if(!e)continue;
+      const fn=clean(p.firstName||'');
+      const ln=clean(p.lastName||'');
+      const key=presenterMapKey(fn,ln,e);
+      if(!key)continue; // truly nothing to identify by — skip
+
       const rec={
-        firstName:clean(p.firstName||''),
-        lastName:clean(p.lastName||''),
+        firstName:fn,
+        lastName:ln,
         email:e,
         organization:clean(p.organization||p.company||p.affiliation||''),
         title:clean(p.title||''),
         bio:clean(p.bio||'')
       };
-      if(!emailMap[e]){
-        emailMap[e]=rec;
+
+      if(!speakerMap[key]){
+        speakerMap[key]=rec;
       }else{
-        const ex=emailMap[e];
-        const score=r=>[r.firstName,r.lastName,r.organization,r.title,r.bio].filter(Boolean).length;
-        if(score(rec)>score(ex)) emailMap[e]=rec;
+        const ex=speakerMap[key];
+        const score=r=>[r.firstName,r.lastName,r.email,r.organization,r.title,r.bio].filter(Boolean).length;
+        if(score(rec)>score(ex)) speakerMap[key]=rec;
       }
+
+      sessionCountMap[key]=(sessionCountMap[key]||0)+1;
     }
   }
 
   function speakerCode(firstName,lastName,emailAddr){
+    // Hash seed: email is primary stable identifier; fall back to normalized name
+    const seed=emailAddr?emailAddr.toLowerCase().trim():norm((firstName+' '+lastName).trim());
     let h=0;
-    const e=(emailAddr||'').toLowerCase().trim();
-    for(let i=0;i<e.length;i++)h=Math.imul(31,h)+e.charCodeAt(i)|0;
+    for(let i=0;i<seed.length;i++)h=Math.imul(31,h)+seed.charCodeAt(i)|0;
     const num=(Math.abs(h)%900)+100;
-    return `${firstName.replace(/[^a-zA-Z]/g,'')}${lastName.replace(/[^a-zA-Z]/g,'')}${num}`;
+    // Prefix: name if available, else email local-part, else 'Speaker'
+    const namePart=(firstName+lastName).replace(/[^a-zA-Z]/g,'');
+    const prefix=namePart||(emailAddr?emailAddr.split('@')[0].replace(/[^a-zA-Z0-9]/g,''):'Speaker');
+    return `${prefix}${num}`;
   }
 
-  const sessionCountMap={};
-  for(const session of acceptedSessions){
-    for(const p of(session.presenters||[])){
-      const e=email(p.email||'');
-      if(!e)continue;
-      sessionCountMap[e]=(sessionCountMap[e]||0)+1;
-    }
-  }
-
-  const speakers=Object.values(emailMap).map(sp=>({
+  const speakers=Object.entries(speakerMap).map(([key,sp])=>({
     ...sp,
-    sessionCount:sessionCountMap[sp.email]||1,
-    social:socialMap[sp.email]||{facebook:'',linkedin:'',x:''}
+    sessionCount:sessionCountMap[key]||1,
+    social:sp.email?socialMap[sp.email]||{facebook:'',linkedin:'',x:'}:{facebook:'',linkedin:'',x:''}
   }));
 
+  const emailsInExport=new Set(speakers.map(s=>s.email).filter(Boolean));
   const nameGroups={};
   for(const sp of speakers){
     const key=(norm(sp.firstName)+' '+norm(sp.lastName)).trim();
@@ -5628,7 +5638,9 @@ function processCventSpeakerExport(socialRows){
   const withLI=speakers.filter(s=>s.social.linkedin).length;
   const withX=speakers.filter(s=>s.social.x).length;
   const withNoSocial=speakers.filter(s=>!s.social.facebook&&!s.social.linkedin&&!s.social.x).length;
-  const socialEmailsNotMatched=Object.keys(socialMap).filter(e=>!emailMap[e]);
+  const withNoName=speakers.filter(s=>!s.firstName&&!s.lastName).length;
+  const withNoEmail=speakers.filter(s=>!s.email).length;
+  const socialEmailsNotMatched=Object.keys(socialMap).filter(e=>!emailsInExport.has(e));
   const multiSessionSpeakers=speakers.filter(s=>s.sessionCount>1).length;
 
   window._cventState={
@@ -5636,7 +5648,7 @@ function processCventSpeakerExport(socialRows){
     duplicatePairs,
     mergeDecisions:{},
     speakerCode,
-    stats:{totalSpeakers,withFB,withLI,withX,withNoSocial,socialEmailsNotMatched,multiSessionSpeakers}
+    stats:{totalSpeakers,withFB,withLI,withX,withNoSocial,withNoName,withNoEmail,socialEmailsNotMatched,multiSessionSpeakers}
   };
 
   renderCventReview();
@@ -5644,7 +5656,7 @@ function processCventSpeakerExport(socialRows){
 
 function renderCventReview(){
   const{speakers,duplicatePairs,mergeDecisions,speakerCode,stats}=window._cventState;
-  const{totalSpeakers,withFB,withLI,withX,withNoSocial,socialEmailsNotMatched,multiSessionSpeakers}=stats;
+  const{totalSpeakers,withFB,withLI,withX,withNoSocial,withNoName,withNoEmail,socialEmailsNotMatched,multiSessionSpeakers}=stats;
   const resolvedCount=Object.keys(mergeDecisions).length;
 
   const unresolvedCount=duplicatePairs.filter(g=>{
@@ -5700,6 +5712,8 @@ function renderCventReview(){
           <div style="font-size:.7rem;color:#475569;font-weight:700;line-height:1.3">Duplicate pairs<br>resolved</div>
         </div>
       </div>
+      ${withNoName>0?`<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:8px 13px;margin-bottom:10px;font-size:.8rem;color:#991b1b;font-weight:700">⚠ ${withNoName} speaker${withNoName>1?'s':''} have no first or last name in the system — First Name and Last Name will be blank in the export. Verify these records in your source data.</div>`:''}
+      ${withNoEmail>0?`<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:8px 13px;margin-bottom:10px;font-size:.8rem;color:#92400e;font-weight:700">⚠ ${withNoEmail} speaker${withNoEmail>1?' are':' is'} included without an email — speaker code is based on name and may change if their email is added later.</div>`:''}
       ${withNoSocial>0?`<div style="background:#fef9c3;border:1px solid #fde047;border-radius:10px;padding:8px 13px;margin-bottom:10px;font-size:.8rem;color:#713f12;font-weight:700">⚠ ${withNoSocial} speaker${withNoSocial>1?'s':''} will export with no social media URLs.</div>`:''}
       ${socialEmailsNotMatched.length>0?`<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:8px 13px;margin-bottom:10px;font-size:.8rem;color:#991b1b"><b>${socialEmailsNotMatched.length} email${socialEmailsNotMatched.length>1?'s':''} in social media file not matched to any accepted speaker:</b><div style="margin-top:4px;font-weight:400">${socialEmailsNotMatched.map(e=>`<span style="font-family:monospace;font-size:.75rem">${esc(e)}</span>`).join(', ')}</div></div>`:''}
       ${duplicatePairs.length>0?`<div style="margin-bottom:14px"><div style="font-weight:800;color:#122345;margin-bottom:8px;font-size:.9rem">⚠ ${duplicatePairs.length} potential duplicate${duplicatePairs.length>1?'s':''} — review before downloading</div><div>${dupHtml}</div></div>`:`<div style="margin-bottom:14px">${dupHtml}</div>`}
